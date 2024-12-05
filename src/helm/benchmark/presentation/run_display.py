@@ -2,7 +2,12 @@ from collections import OrderedDict, defaultdict
 from dataclasses import dataclass, replace
 import os
 from typing import Dict, Iterable, List, Optional, Set, Tuple, Any
-from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.backends import default_backend
+import base64
+import os
+
 
 from helm.benchmark.adaptation.adapter_spec import (
     ADAPT_MULTIPLE_CHOICE_SEPARATE_METHODS,
@@ -149,12 +154,31 @@ def _get_metric_names_for_groups(run_group_names: Iterable[str], schema: Schema)
 _INSTANCES_JSON_FILE_NAME = "instances.json"
 _DISPLAY_PREDICTIONS_JSON_FILE_NAME = "display_predictions.json"
 _DISPLAY_REQUESTS_JSON_FILE_NAME = "display_requests.json"
-_ENCRYPTION_KEY_FILE_NAME = "encryption_key.txt"
+_DISPLAY_ENCRYPTION_DATA_JSON_FILE_NAME = "encryption_data.json"
 
+class HELMEncryptor:
+    def __init__(self, key, iv):
+        self.key = key
+        self.iv = iv
+        self.encryption_data_mapping = {}
+        self.idx = 0
 
-def _encrypt_text(text: str, key: bytes) -> str:
-    fernet = Fernet(key)
-    return fernet.encrypt(text.encode()).decode()
+    def encrypt_text(self, text: str) -> str:
+        cipher = Cipher(algorithms.AES(self.key), modes.GCM(self.iv), backend=default_backend())
+        encryptor = cipher.encryptor()
+        ciphertext = encryptor.update(text.encode()) + encryptor.finalize()
+        ret_text = f"[{self.idx}]" + base64.b64encode(ciphertext).decode()
+
+        res = {
+            "ciphertext": base64.b64encode(ciphertext).decode(),
+            "key": base64.b64encode(self.key).decode(),
+            "iv": base64.b64encode(self.iv).decode(),
+            "tag": base64.b64encode(encryptor.tag).decode(),
+        }
+        assert ret_text not in self.encryption_data_mapping
+        self.encryption_data_mapping[ret_text] = res
+        self.idx += 1
+        return ret_text
 
 
 @htrack(None)
@@ -308,27 +332,29 @@ def write_run_display_json(run_path: str, run_spec: RunSpec, schema: Schema, ski
     # Ad hoc change, should be refactored to read attribute from scenario spec
     use_encryption = run_spec.scenario_spec.class_name.endswith("GPQAScenario")
     if use_encryption:
-        # Generate a new encryption key and save it to a file
-        key = Fernet.generate_key()
-        encryption_key_file_path = os.path.join(run_path, _ENCRYPTION_KEY_FILE_NAME)
-        with open(encryption_key_file_path, 'wb') as key_file:
-            key_file.write(key)
+        key = os.urandom(32)  # 256-bit key
+        iv = os.urandom(12)  # 96-bit IV (suitable for AES-GCM)
+        encryptor = HELMEncryptor(key, iv)
 
         for idx, instance in enumerate(instances):
-            updated_input = replace(instance.input, text=_encrypt_text(instance.input.text, key))
+            updated_input = replace(instance.input, text=encryptor.encrypt_text(instance.input.text))
             updated_references = [
-                replace(reference, output=replace(reference.output, text=_encrypt_text(reference.output.text, key)))
+                replace(reference, output=replace(reference.output, text=encryptor.encrypt_text(reference.output.text)))
                 for reference in instance.references
             ]
             instances[idx] = replace(instance, input=updated_input, references=updated_references)
 
         # For each prediction, replace the predicted text with the encrypted text
         for idx, prediction in enumerate(predictions):
-            predictions[idx] = replace(prediction, predicted_text=_encrypt_text(prediction.predicted_text, key))
+            predictions[idx] = replace(prediction, predicted_text=encryptor.encrypt_text(prediction.predicted_text))
 
         # For each request, replace the input prompt with the encrypted prompt
         for idx, request in enumerate(requests):
-            requests[idx] = replace(request, request=replace(request.request, prompt=_encrypt_text(request.request.prompt, key)))
+            requests[idx] = replace(request, request=replace(request.request, prompt=encryptor.encrypt_text(request.request.prompt)))
+
+        # Write the encryption data to a file
+        encryption_data_path = os.path.join(run_path, _DISPLAY_ENCRYPTION_DATA_JSON_FILE_NAME)
+        write(encryption_data_path, to_json(encryptor.encryption_data_mapping))
 
     write(
         instances_file_path,
