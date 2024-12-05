@@ -158,7 +158,7 @@ def _encrypt_text(text: str, key: bytes) -> str:
 
 
 @htrack(None)
-def write_run_display_json(run_path: str, run_spec: RunSpec, schema: Schema, skip_completed: bool, use_encryption: bool = True) -> None:
+def write_run_display_json(run_path: str, run_spec: RunSpec, schema: Schema, skip_completed: bool, use_encryption: bool = False) -> None:
     """Write run JSON files that are used by the web frontend.
 
     The derived JSON files that are used by the web frontend are much more compact than
@@ -304,6 +304,9 @@ def write_run_display_json(run_path: str, run_spec: RunSpec, schema: Schema, ski
         )
 
     instances = list(instance_id_to_instance.values())
+    
+    # Ad hoc change, should be refactored to read attribute from scenario spec
+    use_encryption = run_spec.scenario_spec.class_name.endswith("GPQAScenario")
     if use_encryption:
         # Generate a new encryption key and save it to a file
         key = Fernet.generate_key()
@@ -311,19 +314,21 @@ def write_run_display_json(run_path: str, run_spec: RunSpec, schema: Schema, ski
         with open(encryption_key_file_path, 'wb') as key_file:
             key_file.write(key)
 
-        # For each instance, replace the input text and reference output texts with the encrypted text
-        for instance in instances:
-            instance = replace(instance, input=replace(instance.input, text=_encrypt_text(instance.input.text, key)))
-            for reference in instance.references:
-                reference = replace(reference, output=replace(reference.output, text=_encrypt_text(reference.output.text, key)))
+        for idx, instance in enumerate(instances):
+            updated_input = replace(instance.input, text=_encrypt_text(instance.input.text, key))
+            updated_references = [
+                replace(reference, output=replace(reference.output, text=_encrypt_text(reference.output.text, key)))
+                for reference in instance.references
+            ]
+            instances[idx] = replace(instance, input=updated_input, references=updated_references)
 
-        # For each prediction, replace the predicted text and mapped output with the encrypted text
-        for prediction in predictions:
-            prediction = replace(prediction, predicted_text=_encrypt_text(prediction.predicted_text, key))
+        # For each prediction, replace the predicted text with the encrypted text
+        for idx, prediction in enumerate(predictions):
+            predictions[idx] = replace(prediction, predicted_text=_encrypt_text(prediction.predicted_text, key))
 
         # For each request, replace the input prompt with the encrypted prompt
-        for request in requests:
-            request = replace(request, request=replace(request.request, prompt=_encrypt_text(request.request.prompt, key)))
+        for idx, request in enumerate(requests):
+            requests[idx] = replace(request, request=replace(request.request, prompt=_encrypt_text(request.request.prompt, key)))
 
     write(
         instances_file_path,
