@@ -1,7 +1,8 @@
 from collections import OrderedDict, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import os
 from typing import Dict, Iterable, List, Optional, Set, Tuple, Any
+from cryptography.fernet import Fernet
 
 from helm.benchmark.adaptation.adapter_spec import (
     ADAPT_MULTIPLE_CHOICE_SEPARATE_METHODS,
@@ -148,10 +149,16 @@ def _get_metric_names_for_groups(run_group_names: Iterable[str], schema: Schema)
 _INSTANCES_JSON_FILE_NAME = "instances.json"
 _DISPLAY_PREDICTIONS_JSON_FILE_NAME = "display_predictions.json"
 _DISPLAY_REQUESTS_JSON_FILE_NAME = "display_requests.json"
+_ENCRYPTION_KEY_FILE_NAME = "encryption_key.txt"
+
+
+def _encrypt_text(text: str, key: bytes) -> str:
+    fernet = Fernet(key)
+    return fernet.encrypt(text.encode()).decode()
 
 
 @htrack(None)
-def write_run_display_json(run_path: str, run_spec: RunSpec, schema: Schema, skip_completed: bool) -> None:
+def write_run_display_json(run_path: str, run_spec: RunSpec, schema: Schema, skip_completed: bool, use_encryption: bool = True) -> None:
     """Write run JSON files that are used by the web frontend.
 
     The derived JSON files that are used by the web frontend are much more compact than
@@ -295,11 +302,37 @@ def write_run_display_json(run_path: str, run_spec: RunSpec, schema: Schema, ski
                 request=request_state.request,
             )
         )
+
+    instances = list(instance_id_to_instance.values())
+    if use_encryption:
+        # Generate a new encryption key and save it to a file
+        key = Fernet.generate_key()
+        encryption_key_file_path = os.path.join(run_path, _ENCRYPTION_KEY_FILE_NAME)
+        with open(encryption_key_file_path, 'wb') as key_file:
+            key_file.write(key)
+
+        # For each instance, replace the input text and reference output texts with the encrypted text
+        for instance in instances:
+            instance = replace(instance, input=replace(instance.input, text=_encrypt_text(instance.input.text, key)))
+            for reference in instance.references:
+                reference = replace(reference, output=replace(reference.output, text=_encrypt_text(reference.output.text, key)))
+
+        # For each prediction, replace the predicted text and mapped output with the encrypted text
+        for prediction in predictions:
+            prediction = replace(prediction, predicted_text=_encrypt_text(prediction.predicted_text, key))
+
+        # For each request, replace the input prompt with the encrypted prompt
+        for request in requests:
+            request = replace(request, request=replace(request.request, prompt=_encrypt_text(request.request.prompt, key)))
+
     write(
         instances_file_path,
-        to_json(list(instance_id_to_instance.values())),
+        to_json(instances),
     )
-    write(display_predictions_file_path, to_json(predictions))
+    write(
+        display_predictions_file_path,
+        to_json(predictions)
+    )
     write(
         display_requests_file_path,
         to_json(requests),
