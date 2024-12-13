@@ -1,5 +1,21 @@
 <!--intro-start-->
 
+# Instructions for running MLC-LLM Serve models
+Follow the setup instructions for MLC-LLM, HELM (+VHELM). Then, we can run on a set of benchmarks described by prod_env/run_entries.conf. Currently it contains configs to run MMMU on all 30 subsets.  
+First set up the MLC serving
+```
+# mlc_llm serve /path/to/model --model-lib /path/to/model_lib.so --port <port>
+ 
+$ mlc_llm serve ./dist/Phi-3.5-vision-instruct-q4f32_1-MLC/ --model-lib ./dist/libs/Phi-3.5-vision-instruct-q4f32_1-cuda.so --port 3333
+```
+Then HELM can be run to start the benchmark
+```
+# Several arguments for helm-run, can be seen on HELM docs. The one that runs out of the box with the config in prod_env is below
+# eg. helm-run -c <conf_file> --suite <any convenient name> -m <max num examples per subset> -n <num concurrent workers> --models-to-run <model name in model_metadata.yaml> --skip-completed-runs
+
+$ helm-run -c prod_env/run_entries.conf --suite mmmu_testing -m 100 -n 1 --models-to-run mlc/Phi-3.5-vision-instruct-q4f32_1-MLC --skip-completed-runs
+```
+
 # Holistic Evaluation of Language Models
 
 [comment]: <> (When using the img tag, which allows us to specify size, src has to be a URL.)
