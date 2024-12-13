@@ -1,0 +1,10 @@
+model_deployments:
+  - name: mlc/Phi-3.5-vision-instruct-q4f32_1-MLC
+    model_name: mlc/Phi-3.5-vision-instruct-q4f32_1-MLC
+    tokenizer_name: openai/clip-vit-large-patch14
+    max_sequence_length: 128000
+    client_spec:
+      class_name: "helm.clients.openai_client.OpenAIClient"
+      args:
+        base_url: http://127.0.0.1:3333/v1
+        api_key: "NA"
